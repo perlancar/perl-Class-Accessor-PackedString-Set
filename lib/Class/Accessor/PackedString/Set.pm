@@ -42,27 +42,32 @@ sub import {
     @attrs = @$attrs;
     while (my ($name, $template) = splice @attrs, 0, 2) {
         my $idx = $idx{$name};
-        my $code_str = 'sub (;$) {';
-        $code_str .= qq( my \$self = shift;);
+        my $code_str = 'sub (;$) {' . "\n";
+        $code_str .= qq(  my \$self = shift;\n);
 
-        $code_str .= qq( my \$val; my \$pos = 0; while (1) { last if \$pos >= length(\$\$self); my \$idx = ord(substr(\$\$self, \$pos++, 1)););
+        $code_str .= qq(  my \$val;\n  my \$pos = 0;\n  while (1) {\n    last if \$pos >= length(\$\$self);\n    my \$idx = ord(substr(\$\$self, \$pos++, 1));\n);
         for my $attr (sort {$idx{$a} <=> $idx{$b}} keys %idx) {
             my $idx = $idx{$attr};
-            $code_str .= qq| if (\$idx == $idx) { my \$v = unpack("| . $tmpl{$attr} . qq|", substr(\$\$self, \$pos, | . $tmplsize{$attr} . qq|)); \$pos += | . $tmplsize{$attr} . qq|;|;
+            $code_str .= qq|    |.($idx == 0 ? "if   " : "elsif").qq| (\$idx == $idx) { my \$v = unpack("| . $tmpl{$attr} . qq|", substr(\$\$self, \$pos, | . $tmplsize{$attr} . qq|));|;
             if ($attr eq $name) {
-                $code_str .= qq| \$val = \$v; last;|;
+                $code_str .= qq| \$val = \$v; if (\@_ && defined \$_[0]) { substr(\$\$self, \$pos, | . $tmplsize{$attr} . qq|) = pack("| . $tmpl{$attr} . qq|", \$_[0]); return \$val } last|;
             } else {
-                $code_str .= qq| next;|;
+                $code_str .= qq| \$pos += | . $tmplsize{$attr} . qq|; next|;
             }
-            $code_str .= qq| }|;
+            $code_str .= qq| }\n|;
         }
-        $code_str .= qq(} );
+        $code_str .= qq(    else  { die "Invalid data in object \$self: invalid index \$idx" }\n);
+        $code_str .= qq(  }\n);
 
-        # TODO
-        #$code_str .= qq( if (\@_) { \$attrs[$idx] = \$_[0]; \$\$self = pack("$pack_template", \@attrs) });
-        #$code_str .= qq( return \$attrs[$idx];);
-        $code_str .= " }";
-        print "D:accessor code for $name: ", $code_str, "\n";
+        $code_str .= qq(  return \$val unless \@_;\n);
+        $code_str .= qq(  if (defined \$_[0]) {\n); # set a newly set attribute, append
+        $code_str .= qq|    \$\$self .= chr($idx) . pack("|. $tmpl{$name} . qq|", \$_[0]);\n|;
+        $code_str .= qq(  } elsif (defined \$val) {\n); # delete unset attribute
+        $code_str .= qq|    substr(\$\$self, \$pos-1, | . $tmplsize{$name} . qq|+1) = "";\n|;
+        $code_str .= qq(  }\n);
+        $code_str .= qq(  return \$val;\n);
+        $code_str .= "}\n";
+        #print "D:accessor code for $name: ", $code_str, "\n";
         *{"$class\::$name"} = eval $code_str;
         die if $@;
     }
@@ -96,7 +101,7 @@ sub import {
 }
 
 1;
-# ABSTRACT: Generate accessors/constructor for object that use pack()-ed string as storage backend
+# ABSTRACT: Like Class::Accessor::PackedString, but store attributes as they are set
 
 =for Pod::Coverage .+
 
@@ -171,16 +176,17 @@ attribute is set, string will be appended with this data:
  | 1 byte      | index of attribute                 |
  | (pack size) | attribute value, encoded by pack() |
 
-When another attribute is set, string will be further appended with similar
-data. When an attribute is unset (undef'd), its entry will be removed in the
-string.
+When another attribute is set, string will be further appended. When an
+attribute is unset (undef'd), its entry will be removed in the string.
 
-Using string (of pack()-ed data) is useful in situations where you need to
-create many (e.g. thousands+) objects in memory and want to reduce memory usage,
-because string-based objects are more space-efficient than the commonly used
-hash-based objects. Space is further saved by only storing set attributes and
-not unset attributes. This particularly saves significant space if you happen to
-have many attributes with usually only a few of them set.
+This module is similar to L<Class::Accessor::PackedString>. Using string (of
+pack()-ed data) is useful in situations where you need to create many (e.g.
+thousands+) objects in memory and want to reduce memory usage, because
+string-based objects are more space-efficient than the commonly used hash-based
+objects. Unlike in Class::Accessor::PackedString, space is further saved by only
+storing set attributes and not unset attributes. This particularly saves
+significant space if you happen to have many attributes with usually only a few
+of them set.
 
 The downsides are: 1) you have to predeclare all the attributes of your class
 along with their types (pack() templates); 2) you can only store data which can
